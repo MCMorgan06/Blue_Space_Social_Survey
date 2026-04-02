@@ -1,8 +1,8 @@
 Analysis outputs are organised using the following naming convention:
 
-1_ stage 1,
-2_ stage 2,
-3_ stage 3
+1_ step one,
+2_ step two,
+3_ step three
 
 All corresponding files and supporting materials are included within the repository.
 
