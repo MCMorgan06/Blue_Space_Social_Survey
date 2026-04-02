@@ -1,0 +1,729 @@
+---
+title: "Query_data"
+output: html_document
+date: "2025-07-28"
+---
+## setup
+
+```{r setup, include=FALSE}
+setwd("~/Blue_Space_Survey_Analysis/Blue Space Survey Code")
+getwd()
+```
+
+```{r load_packages}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+```
+
+```{r import_data}
+# nvivo
+query <- read_excel("condition_query.xlsx")
+
+# Rename 
+colnames(query)[1] <- "Respondents"
+
+# Remove the leading number
+query$Respondents <- sub("^\\d+\\s*:\\s*", "", query$Respondents)
+
+# survey data
+survey <- read_excel("raw_results_survey_20250605.xlsx")
+
+unique(query$Respondents)
+unique(survey$Respondents)
+```
+
+## Cross tab
+Cross tab comparisons were not used in final analysis but retained here
+for reference (McNemars used instead, see below)
+```{r pair_data}
+paired <- left_join(query, survey, by = "Respondents")
+```
+
+```{r cross tab - displeases}
+table(
+  paired$`A : Displeasing`,
+  paired$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`
+)
+displeased_only <- paired[paired$`A : Displeasing` > 0, ]
+
+table(displeased_only$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`)
+
+```
+
+```{r cross tab - pleased}
+table(
+  paired$`B : Pleasing`,
+  paired$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`
+)
+pleased_only <- paired[paired$`B : Pleasing` > 0, ]
+
+table(
+  pleased_only$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`
+)
+
+```
+
+```{r table compare - cross tab example}
+# Create frequency tables
+pleased_tab <- table(pleased_only$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`)
+displeased_tab <- table(displeased_only$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`)
+
+# Combine into a data.frame with all categories (fill missing with 0)
+combined <- merge(
+  as.data.frame(pleased_tab),
+  as.data.frame(displeased_tab),
+  by = "Var1",
+  all = TRUE,
+  suffixes = c("_Pleased", "_Displeased")
+)
+
+# Replace NA with 0
+combined[is.na(combined)] <- 0
+
+# Rename columns for clarity
+colnames(combined) <- c("Response", "Count_Pleased", "Count_Displeased")
+
+print(combined)
+
+```
+
+## Q16 - Q17 comparison 
+
+```{r q16 and q17 comparison}
+# Create themes with groups of taxa
+  themes <- c(
+  "Amphibians",
+  "Birds", 
+  "Fish",
+  "Mammals",
+  "Reptiles",
+  "Other Taxa", # Crustacea, Cnidaria, Echinoderms, Bivlaves, Molluscs, Worms
+  "Insects and Spiders", # insects and arachnids
+  "General Nature",
+  "Plants, Fungi, Lichen"
+)
+
+# Frequencies for q16
+blue_space_freq <- c(
+  63,   # amphibians
+ 527,  # birds
+  93,   # fish
+  295,   # mammals
+  29, # reptiles
+  33, # other taxa
+  139, # Insects and Spiders
+  5, # General nature
+  53 # PLants, fungi and liches
+)
+
+# Frequencies for Wild Blue Space condition
+wild_blue_space_freq <- c(
+   27,   # amphibians
+ 130,  # birds
+  34,   # fish
+  163,   # mammals
+  9, # reptiles
+  0, # Other taxa
+  64, # Insects and Spiders
+  69, # General nature
+  15 # PLants, fungi and liches
+)
+
+# data handling
+
+# Create dataframe
+df <- data.frame(
+  Theme = themes,
+  Blue_Space = blue_space_freq,
+  Wild_Blue_Space = wild_blue_space_freq
+)
+
+# Calculate totals and proportions
+df$Total <- df$Blue_Space + df$Wild_Blue_Space
+df$Blue_Prop <- df$Blue_Space / df$Total
+df$Wild_Prop <- df$Wild_Blue_Space / df$Total
+
+# Reshape for ggplot
+df_long <- df %>%
+  dplyr::select(Theme, Blue_Space, Wild_Blue_Space) %>%
+  tidyr::pivot_longer(
+    cols = c(Blue_Space, Wild_Blue_Space),
+    names_to = "Condition",
+    values_to = "Frequency"
+  )
+
+# Clean condition names
+df_long$Condition <- gsub("_", " ", df_long$Condition)
+
+#
+df_diverging <- df %>%
+  mutate(Blue_Space_neg = -Blue_Space,
+         Theme_ordered = reorder(Theme, Total))
+
+# Option 1: Use more breaks across the full range
+plot2 <- ggplot(df_diverging, aes(x = Theme_ordered)) +
+  geom_col(aes(y = Blue_Space_neg), fill = "#9ec9c9", alpha = 1) +
+  geom_col(aes(y = Wild_Blue_Space), fill = "#7ea1a1", alpha = 1) +
+  coord_flip() +
+  geom_hline(yintercept = 0, color = "black", size = 0.5) +
+  labs(title = "Wildlife Observed vs Wildlife Desired",
+       x = "",
+       y = "Frequency") +
+  theme_classic() +
+   theme(
+    plot.title = element_text(size = 16),      # Title size
+    axis.text.x = element_text(size = 14),     # X-axis tick labels
+    axis.text.y = element_text(size = 14),     # Y-axis tick labels  
+    axis.title.x = element_text(size = 16),    # X-axis title
+    axis.title.y = element_text(size = 11)     # Y-axis title
+  ) +
+  scale_y_continuous(
+    breaks = c(-500, -400, -300, -200, -100, 0, 100, 200),
+    labels = c("500", "400", "300", "200", "100", "0", "100", "200"),
+    limits = c(-540, 200)
+  )
+plot2
+
+# Save the plot at 400 DPI
+ggsave("q19_plot.png", plot = plot2, 
+       width = 12, height = 8, 
+       dpi = 400, 
+       units = "in")
+```
+
+## McNemars
+
+```{r Mcnemar's Test Wildlife}
+# bring in data
+q14 <- read_excel("Matrix Coding Query_q14_Wild.xlsx")
+q15 <- read_excel("Matrix Coding Query_q15_Wild.xlsx")
+q14_q15 <- left_join(q14, q15, by = "Respondents")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_wildlife:", unique(q14_q15$Q14_Wildlife), "\n")
+cat("Unique values in Q15_wildlife:", unique(q14_q15$Q15_Wildlife), "\n")
+
+# Convert to binary
+q14_q15$Q14_binary <- ifelse(q14_q15$Q14_Wildlife >= 1, 1, 0)
+q14_q15$Q15_binary <- ifelse(q14_q15$Q15_Wildlife >= 1, 1, 0)
+
+# Create contingency table
+table_binary <- table(q14_q15$Q14_binary, q14_q15$Q15_binary)
+print(table_binary)
+
+# Add names
+dimnames(table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(table_binary)
+
+# Run McNemar's 
+mcnemar.test(table_binary)
+
+```
+
+```{r Mcnemar's Test Inland}
+# bring in data
+inland <- read_excel("Matrix Coding Query_Inland.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_wildlife:", unique(inland$Q14_inland), "\n")
+cat("Unique values in Q15_wildlife:", unique(inland$Q15_inland), "\n")
+
+# Convert to binary
+inland$Q14_binary <- ifelse(inland$Q14_inland >= 1, 1, 0)
+inland$Q15_binary <- ifelse(inland$Q15_inland >= 1, 1, 0)
+
+# Create contingency table
+inland_table_binary <- table(inland$Q14_binary, inland$Q15_binary)
+print(inland_table_binary)
+
+# Add names
+dimnames(inland_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(inland_table_binary)
+
+# Run McNemar's 
+mcnemar.test(inland_table_binary)
+
+```
+
+```{r Mcnemar's Test Therapeutic}
+# bring in data
+thera <- read_excel("Matrix Coding Query_Thera.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_thera:", unique(thera$Q14_thera), "\n")
+cat("Unique values in Q15_thera:", unique(thera$Q15_thera), "\n")
+
+# Convert to binary
+thera$Q14_binary <- ifelse(thera$Q14_thera >= 1, 1, 0)
+thera$Q15_binary <- ifelse(thera$Q15_thera >= 1, 1, 0)
+
+# Create contingency table
+thera_table_binary <- table(thera$Q14_binary, thera$Q15_binary)
+print(inland_table_binary)
+
+# Add names
+dimnames(thera_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(thera_table_binary)
+
+# Run McNemar's 
+mcnemar.test(thera_table_binary)
+
+```
+
+```{r Mcnemar's Test Coastal}
+# bring in data
+coast <- read_excel("Matrix Coding Query_Coastal.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_thera:", unique(coast$Q14_coastal), "\n")
+cat("Unique values in Q15_thera:", unique(coast$Q15_coastal), "\n")
+
+# Convert to binary
+coast$Q14_binary <- ifelse(coast$Q14_coastal >= 1, 1, 0)
+coast$Q15_binary <- ifelse(coast$Q15_coastal >= 1, 1, 0)
+
+# Create contingency table
+coast_table_binary <- table(coast$Q14_binary, coast$Q15_binary)
+print(coast_table_binary)
+
+# Add names
+dimnames(coast_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(coast_table_binary)
+
+# Run McNemar's 
+mcnemar.test(coast_table_binary)
+
+```
+
+```{r Mcnemar's Test Estuary}
+# bring in data
+estuary <- read_excel("Matrix Coding Query_Estuary.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_estuary:", unique(estuary$Q14_estuary), "\n")
+cat("Unique values in Q15_estuary:", unique(estuary$Q15_estuary), "\n")
+
+# Convert to binary
+estuary$Q14_binary <- ifelse(estuary$Q14_estuary >= 1, 1, 0)
+estuary$Q15_binary <- ifelse(estuary$Q15_estuary >= 1, 1, 0)
+
+# Create contingency table
+estuary_table_binary <- table(estuary$Q14_binary, estuary$Q15_binary)
+print(estuary_table_binary)
+
+# Add names
+dimnames(estuary_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(estuary_table_binary)
+
+# Run McNemar's 
+mcnemar.test(estuary_table_binary)
+
+```
+
+```{r Mcnemar's Test Colour}
+# bring in data
+colour <- read_excel("Matrix Coding Query_Colour.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_colour:", unique(colour$Q14_colour), "\n")
+cat("Unique values in Q15_colour:", unique(colour$Q15_colour), "\n")
+
+# Convert to binary
+colour$Q14_binary <- ifelse(colour$Q14_colour >= 1, 1, 0)
+colour$Q15_binary <- ifelse(colour$Q15_colour >= 1, 1, 0)
+
+# Create contingency table
+colour_table_binary <- table(colour$Q14_binary, colour$Q15_binary)
+print(colour_table_binary)
+
+# Add names
+dimnames(colour_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(colour_table_binary)
+
+# Run McNemar's 
+mcnemar.test(colour_table_binary)
+
+```
+
+```{r Mcnemar's Test Vast}
+# bring in data
+vast <- read_excel("Matrix Coding Query_Vast.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_vast:", unique(vast$Q14_vast), "\n")
+cat("Unique values in Q15_vast:", unique(vast$Q15_vast), "\n")
+
+# Convert to binary
+vast$Q14_binary <- ifelse(vast$Q14_vast >= 1, 1, 0)
+vast$Q15_binary <- ifelse(vast$Q15_vast >= 1, 1, 0)
+
+# Create contingency table
+vast_table_binary <- table(vast$Q14_binary, vast$Q15_binary)
+print(vast_table_binary)
+
+# Add names
+dimnames(vast_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(vast_table_binary)
+
+# Run McNemar's 
+mcnemar.test(vast_table_binary)
+
+```
+
+```{r Mcnemar's Test Limited}
+# bring in data
+limited <- read_excel("Matrix Coding Query_Limited.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_limited:", unique(limited$Q14_limited), "\n")
+cat("Unique values in Q15_limited:", unique(limited$Q15_limited), "\n")
+
+# Convert to binary
+limited$Q14_binary <- ifelse(limited$Q14_limited >= 1, 1, 0)
+limited$Q15_binary <- ifelse(limited$Q15_limited >= 1, 1, 0)
+
+# Create contingency table
+limited_table_binary <- table(limited$Q14_binary, limited$Q15_binary)
+print(limited_table_binary)
+
+# Add names
+dimnames(limited_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(limited_table_binary)
+
+# Run McNemar's 
+mcnemar.test(limited_table_binary)
+
+```
+
+```{r Mcnemar's Test Joy}
+# bring in data
+joy <- read_excel("Matrix Coding Query_Joy.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_joy:", unique(joy$Q14_joy), "\n")
+cat("Unique values in Q15_joy:", unique(joy$Q15_joy), "\n")
+
+# Convert to binary
+joy$Q14_binary <- ifelse(joy$Q14_joy >= 1, 1, 0)
+joy$Q15_binary <- ifelse(joy$Q15_joy >= 1, 1, 0)
+
+# Create contingency table
+joy_table_binary <- table(joy$Q14_binary, joy$Q15_binary)
+print(joy_table_binary)
+
+# Add names
+dimnames(joy_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(joy_table_binary)
+
+# Run McNemar's 
+mcnemar.test(joy_table_binary)
+
+```
+
+```{r Mcnemar's Test Dynamic}
+# bring in data
+dynamic <- read_excel("Matrix Coding Query_Dynamic.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_dynamic:", unique(dynamic$Q14_dynamic), "\n")
+cat("Unique values in Q15_dynamic:", unique(dynamic$Q15_dynamic), "\n")
+
+# Convert to binary
+dynamic$Q14_binary <- ifelse(dynamic$Q14_dynamic >= 1, 1, 0)
+dynamic$Q15_binary <- ifelse(dynamic$Q15_dynamic >= 1, 1, 0)
+
+# Create contingency table
+dynamic_table_binary <- table(dynamic$Q14_binary, dynamic$Q15_binary)
+print(dynamic_table_binary)
+
+# Add names
+dimnames(dynamic_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(dynamic_table_binary)
+
+# Run McNemar's 
+mcnemar.test(dynamic_table_binary)
+```
+
+```{r Mcnemar's Test Importance}
+# bring in data
+importance <- read_excel("Matrix Coding Query_Importance.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_importance:", unique(importance$Q14_importance), "\n")
+cat("Unique values in Q15_importance:", unique(importance$Q15_importance), "\n")
+
+# Convert to binary
+importance$Q14_binary <- ifelse(importance$Q14_importance >= 1, 1, 0)
+importance$Q15_binary <- ifelse(importance$Q15_importance >= 1, 1, 0)
+
+# Create contingency table
+importance_table_binary <- table(importance$Q14_binary, importance$Q15_binary)
+print(importance_table_binary)
+
+# Add names
+dimnames(importance_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(importance_table_binary)
+
+# Run McNemar's 
+mcnemar.test(importance_table_binary)
+```
+
+```{r Mcnemar's Test Improving}
+# bring in data
+improving <- read_excel("Matrix Coding Query_Improving.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_improving :", unique(improving $Q14_improving), "\n")
+cat("Unique values in Q15_improving :", unique(improving $Q15_improving), "\n")
+
+# Convert to binary
+improving$Q14_binary <- ifelse(improving$Q14_improving >= 1, 1, 0)
+improving$Q15_binary <- ifelse(improving$Q15_improving >= 1, 1, 0)
+
+# Create contingency table
+improving_table_binary <- table(improving$Q14_binary,improving$Q15_binary)
+print(improving_table_binary)
+
+# Add names
+dimnames(improving_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(improving_table_binary)
+
+# Run McNemar's 
+mcnemar.test(improving_table_binary)
+```
+
+```{r Mcnemar's Test Displeasing}
+
+# bring in data
+disp <- read_excel("Matrix Coding Query_Disp.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_disp :", unique(disp$Q14_disp), "\n")
+cat("Unique values in Q15_disp :", unique(disp$Q15_disp), "\n")
+
+# Convert to binary
+disp$Q14_binary <- ifelse(disp$Q14_disp >= 1, 1, 0)
+disp$Q15_binary <- ifelse(disp$Q15_disp >= 1, 1, 0)
+
+# Create contingency table
+disp_table_binary <- table(disp$Q14_binary,disp$Q15_binary)
+print(disp_table_binary)
+
+# Add names
+dimnames(disp_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(disp_table_binary)
+
+# Run McNemar's 
+mcnemar.test(disp_table_binary)
+```
+
+```{r Mcnemar's Test Neglect}
+
+# bring in data
+neglect <- read_excel("Matrix Coding Query_Neglect.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_neglect  :", unique(neglect$Q14_neglect), "\n")
+cat("Unique values in Q15_neglect  :", unique(neglect$Q15_neglect), "\n")
+
+# Convert to binary
+neglect$Q14_binary <- ifelse(neglect$Q14_neglect >= 1, 1, 0)
+neglect$Q15_binary <- ifelse(neglect$Q15_neglect >= 1, 1, 0)
+
+# Create contingency table
+neglect_table_binary <- table(neglect$Q14_binary,neglect$Q15_binary)
+print(neglect_table_binary)
+
+# Add names
+dimnames(neglect_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(neglect_table_binary)
+
+# Run McNemar's 
+mcnemar.test(neglect_table_binary)
+```
+
+```{r Mcnemar's Test Inaccessible}
+
+# bring in data
+inaccess <- read_excel("Matrix Coding Query_Inaccess.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_inaccess  :", unique(inaccess$Q14_inaccess), "\n")
+cat("Unique values in Q15_inaccess  :", unique(inaccess$Q15_inaccess), "\n")
+
+# Convert to binary
+inaccess$Q14_binary <- ifelse(inaccess$Q14_inaccess >= 1, 1, 0)
+inaccess$Q15_binary <- ifelse(inaccess$Q15_inaccess >= 1, 1, 0)
+
+# Create contingency table
+inaccess_table_binary <- table(inaccess$Q14_binary,inaccess$Q15_binary)
+print(inaccess_table_binary)
+
+# Add names
+dimnames(inaccess_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(inaccess_table_binary)
+
+# Run McNemar's 
+mcnemar.test(inaccess_table_binary)
+```
+
+```{r Mcnemar's Test Popularity}
+
+# bring in data
+popularity <- read_excel("Matrix Coding Query_Pop.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_popularity  :", unique(popularity$Q14_popularity), "\n")
+cat("Unique values in Q15_popularity  :", unique(popularity$Q15_popularity), "\n")
+
+# Convert to binary
+popularity$Q14_binary <- ifelse(popularity$Q14_popularity >= 1, 1, 0)
+popularity$Q15_binary <- ifelse(popularity$Q15_popularity >= 1, 1, 0)
+
+# Create contingency table
+popularity_table_binary <- table(popularity$Q14_binary,popularity$Q15_binary)
+print(popularity_table_binary)
+
+# Add names
+dimnames(popularity_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(popularity_table_binary)
+
+# Run McNemar's 
+mcnemar.test(popularity_table_binary)
+```
+
+```{r Mcnemar's Test Activities}
+
+# bring in data
+activities <- read_excel("Matrix Coding Query_Act.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_activities  :", unique(activities$Q14_activities), "\n")
+cat("Unique values in Q15_activities  :", unique(activities$Q15_activities), "\n")
+
+# Convert to binary
+activities$Q14_binary <- ifelse(activities$Q14_activities >= 1, 1, 0)
+activities$Q15_binary <- ifelse(activities$Q15_activities >= 1, 1, 0)
+
+# Create contingency table
+activities_table_binary <- table(activities$Q14_binary,activities$Q15_binary)
+print(activities_table_binary)
+
+# Add names
+dimnames(activities_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(activities_table_binary)
+
+# Run McNemar's 
+mcnemar.test(activities_table_binary)
+```
+
+```{r Mcnemar's Test Smell}
+
+# bring in data
+smell <- read_excel("Matrix Coding Query_Smell.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_smell  :", unique(smell$Q14_smell), "\n")
+cat("Unique values in Q15_smell  :", unique(smell$Q15_smell), "\n")
+
+# Convert to binary
+smell$Q14_binary <- ifelse(smell$Q14_smell >= 1, 1, 0)
+smell$Q15_binary <- ifelse(smell$Q15_smell >= 1, 1, 0)
+
+# Create contingency table
+smell_table_binary <- table(smell$Q14_binary,smell$Q15_binary)
+print(smell_table_binary)
+
+# Add names
+dimnames(smell_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(smell_table_binary)
+
+# Run McNemar's 
+mcnemar.test(smell_table_binary)
+```
+
+```{r Mcnemar's Test Pleasing}
+
+# bring in data
+pleasing <- read_excel("Matrix Coding Query_Pleasing.xlsx")
+
+# Check the unique values in your data (data is not binary)
+cat("Unique values in Q14_pleasing  :", unique(pleasing$Q14_pleasing), "\n")
+cat("Unique values in Q15_pleasing  :", unique(pleasing$Q15_pleasing), "\n")
+
+# Convert to binary
+pleasing$Q14_binary <- ifelse(pleasing$Q14_pleasing >= 1, 1, 0)
+pleasing$Q15_binary <- ifelse(pleasing$Q15_pleasing >= 1, 1, 0)
+
+# Create contingency table
+pleasing_table_binary <- table(pleasing$Q14_binary,pleasing$Q15_binary)
+print(pleasing_table_binary)
+
+# Add names
+dimnames(pleasing_table_binary) <- list(
+  Q14 = c("No", "Yes"),
+  Q15 = c("No", "Yes")
+)
+print(pleasing_table_binary)
+
+# Run McNemar's 
+mcnemar.test(pleasing_table_binary)
+```

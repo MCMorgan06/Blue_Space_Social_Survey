@@ -1,0 +1,853 @@
+---
+title: "Data Preperation for Models"
+author: "Matthew Morgan"
+date: "2025-05-16"
+output: html_document
+---
+```{r load packages}
+library(lme4)
+library(rlang)
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(writexl)
+library(lifecycle)
+library(stringr)
+library(psych)
+library(ggthemes)
+library(RColorBrewer)
+```
+
+```{r load data from directory}
+data <- read_excel("raw_results_survey_20250605.xlsx")
+```
+
+```{r age histogram}
+p1 <- ggplot(data, aes(x = `2. What is your current age in years?`, fill = `3. What is your gender?`)) +
+  geom_histogram(binwidth = 5, position = "stack", color = "white") +
+  scale_fill_manual(
+    values = c(
+      "Male" = "#9ec9c9",
+      "Female" = "#7ea1a1",
+      "Other" = "#797d7d"  # add a color for "Other"
+    )
+  ) +
+  labs(
+    title = "",
+    x = "Age",
+    y = "Count",
+    fill = "Gender",
+  )+
+    theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 18),    # X-axis title
+    axis.title.y = element_text(size = 18),    # Y-axis title
+    axis.text.x = element_text(size = 18),     # X-axis tick labels
+    axis.text.y = element_text(size = 18),     # Y-axis tick labels
+    legend.title = element_text(size = 18),    # Legend title
+    legend.text = element_text(size = 18)      # Legend items
+  )
+
+# Print the plot to check it
+print(p1)
+
+# Save the plot at 300 dpi
+ggsave(
+  filename = "age_histogram.png",
+  plot = p1,
+  width = 8,       # width in inches
+  height = 6,      # height in inches
+  dpi = 300
+)
+
+# Create ordered age group variable (1 = youngest, 4 = oldest)
+data$age_factor <- cut(
+  data$`2. What is your current age in years?`,
+  breaks = c(17, 29, 44, 59, Inf),
+  labels = c(1, 2, 3, 4),  #
+  right = TRUE,
+  ordered_result = TRUE
+)
+table(data$age_factor)
+
+# Filter to just Male/Female for more robust analysis
+# Filter data to include only Male and Female responses
+data_binary <- data[data$`3. What is your gender?` %in% c("Male", "Female"), ]
+
+# Create contingency table for age groups vs gender (Male/Female only)
+contingency_table_binary <- table(data_binary$age_factor, data_binary$`3. What is your gender?`)
+print(contingency_table_binary)
+
+# Perform chi-square test
+chi_square_binary <- chisq.test(contingency_table_binary)
+print(chi_square_binary)
+
+
+# View expected frequencies
+print(chi_square_result$expected)
+
+# View residuals to see which cells contribute most to chi-square
+print(chi_square_result$residuals)
+```
+
+```{r summaries}
+table(data$`6. Please click the item that best describes the neighbourhood you live in:`)
+table(data$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?`)
+table(data$`3. What is your gender?`)
+
+## chi for gender and location (independent)
+data$location <- data$`6. Please click the item that best describes the neighbourhood you live in:`
+data$gender <- data$`3. What is your gender?`
+
+# Gender × Location (Male/Female only)
+data_binary_loc <- data[data$gender %in% c("Male", "Female"), ]
+gender_location_table_clean <- table(data_binary_loc$gender, data_binary_loc$location)
+print(gender_location_table_clean)
+
+gender_location_chi_clean <- chisq.test(gender_location_table_clean)
+print(gender_location_chi_clean)
+
+# Age and location (not indendent)
+age_location_table_clean <- table(data$age_factor, data$location)
+print(age_location_table_clean)
+
+age_location_chi_clean <- chisq.test(age_location_table_clean)
+print(age_location_chi_clean)
+residuals(age_location_chi_clean)
+```
+
+```{r remove other countries}
+# remove people outside of the UK
+data <- data[data$`4. Do you currently live in the UK?` != 
+             "No", ]
+```
+
+```{r visit frequency}
+# Define the recoding function
+recode_frequency <- function(x) {
+  recode_vals <- c("Never" = 0,
+                   "Once a year" = 1,
+                   "Every 6 months" = 2,
+                   "Monthly" = 12,
+                   "Weekly" = 52)
+  return(as.numeric(recode_vals[x]))
+}
+
+# Apply to relevant columns
+freq_cols <- c("10.1. Rivers, canals and dykes",
+               "10.2. Park lakes",
+               "10.3. Coastal areas",
+               "10.4. Estuaries",
+               "10.5. Marinas")
+
+data[freq_cols] <- lapply(data[freq_cols], recode_frequency)
+
+# Create binary columns for visit or not (1 if freq > 0, else 0)
+binary_cols <- paste0(freq_cols, "_binary")
+data[binary_cols] <- lapply(data[freq_cols], function(x) ifelse(x > 0, 1, 0))
+
+# Sum frequency visits across all blue spaces
+data$blue_space_total_frequency <- rowSums(data[freq_cols], na.rm = TRUE)
+
+# Mean annual visits across the 5 blue space types (0–52 scale)
+data$blue_space_mean_frequency <- rowMeans(data[freq_cols], na.rm = TRUE)
+
+# Sum number of blue spaces visited (binary sum)
+data$blue_space_num_visited <- rowSums(data[binary_cols], na.rm = TRUE)
+
+
+# Select the columns you want to summarize
+trip_cols <- c(
+  "10.1. Rivers, canals and dykes",
+  "10.2. Park lakes",
+  "10.3. Coastal areas",
+  "10.4. Estuaries",
+  "10.5. Marinas"
+)
+
+# Compute means for each column
+trip_means <- sapply(data[trip_cols], mean, na.rm = TRUE)
+
+# Convert to a table/data.frame for nicer display
+trip_means_table <- data.frame(
+  Location = names(trip_means),
+  Mean_Trips = trip_means
+)
+
+# put rivers, canals and dykes over two lines
+trip_means_table$Location <- sub(
+  "Rivers, canals and dykes",
+  "Rivers, canals\nand dykes",
+  trip_means_table$Location
+)
+
+# Print the table
+print(trip_means_table)
+
+# Plot
+
+# Remove numeric prefixes from the Location names
+trip_means_table$Location <- sub("^\\d+\\.\\d+\\.\\s*", "", trip_means_table$Location)
+
+# Create the bar plot
+p2 <- ggplot(trip_means_table, aes(x = reorder(Location, -Mean_Trips), y = Mean_Trips)) +
+  geom_bar(stat = "identity", width = 1, fill = "#9ec9c9", color = "white") +  # <- width added
+  scale_x_discrete(expand = expansion(mult = c(0.02, 0.02))) +                   # <- reduces outer whitespace
+  labs(
+    title = "",
+    x = "",
+    y = "Mean Annual Visits"
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 22),
+    axis.title.y = element_text(size = 22),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 22),
+    axis.text.y = element_text(size = 22),
+    legend.title = element_text(size = 22),
+    legend.text = element_text(size = 22)
+  )
+
+# Print the plot
+print(p2)
+
+
+# Save the plot at 300 dpi
+ggsave(
+  filename = "mean_trips_barplot.png",
+  plot = p2,
+  width = 6,       # width in inches
+  height = 6,      # height in inches
+  dpi = 300
+)
+
+# 
+library(ggplot2)
+library(patchwork)  # for combining plots
+
+# Ensure both plots have the same theme for consistent text sizes
+common_theme <- theme_classic() +
+theme(
+axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+axis.text.y = element_text(size = 16),
+axis.title = element_text(size = 18),
+
+
+# Legend sizing
+legend.title = element_text(size = 16),
+legend.text = element_text(size = 14),
+legend.key.size = unit(0.9, "cm"),
+legend.spacing.y = unit(0.2, "cm")
+)
+
+# Apply common theme to p1 and p2
+p1 <- p1 + common_theme
+p2 <- p2 + common_theme + theme(legend.position = "bottom")
+
+# Combine plots vertically
+combined_plot <- p1 / p2  # '/' stacks plots vertically
+
+# Print combined plot
+print(combined_plot)
+
+# Save combined plot at 300 dpi (square-ish)
+ggsave(
+  filename = "combined_plot.png",
+  plot = combined_plot,
+  width = 7,   # width in inches
+  height = 10, # taller to accommodate both plots
+  dpi = 300
+)
+
+#
+ggplot(data, aes(x = blue_space_mean_frequency)) +
+  geom_histogram(bins = 15, fill = "#9ec9c9", color = "white") +
+  labs(
+    title = "Distribution of Mean Annual Blue-Space Visit Frequency",
+    x = "Mean annual visits per blue-space type",
+    y = "Number of respondents"
+  ) +
+  theme_classic()
+```
+
+```{r agreement values}
+data[data == "7. completely Disagree"] <- "7"
+data[data == "1. completely Agree"] <- "1"
+
+recode_agreement <- function(x) {
+  recode_vals <- c("Strongly disagree" = 1,
+                   "Disagree" = 2,
+                   "Partially disagree" = 3,
+                   "Neutral" = 4,
+                   "Partially agree" = 5,
+                   "Agree" = 6,
+                   "Strongly agree" = 7)
+  # Use unnamed to get numeric vector, and replace unknown values with NA
+  as.numeric(unname(recode_vals[x]))
+}
+
+agreement_cols <- c(
+  "12.1. Cities should have more blue spaces",
+  "12.2. Blue spaces are important for nature",
+  "12.3. Blue spaces in the UK are in poor condition",
+  "12.4. Blue spaces are important for my health and wellbeing",
+  "12.5. We should “rewild” UK blue spaces"
+)
+
+data[agreement_cols] <- lapply(data[agreement_cols], recode_agreement)
+write.csv(data, "attitude_plot.csv")
+```
+
+```{r adjust nci scoring}
+# Define the weighted point values
+score_lookup <- list(
+  "9.1. 1. I always find beauty in nature." = c("1"=0, "2"=1, "3"=2, "4"=3, "5"=5, "6"=9, "7"=15),
+  "9.2. 2. I always treat nature with respect." = c("1"=0, "2"=0, "3"=1, "4"=2, "5"=4, "6"=6, "7"=10),
+  "9.3. 3. Being in nature makes me very happy." = c("1"=0, "2"=1, "3"=2, "4"=3, "5"=6, "6"=10, "7"=16),
+  "9.4. 4. Spending time in nature is very important to me." = c("1"=0, "2"=1, "3"=2, "4"=3, "5"=6, "6"=11, "7"=19),
+  "9.5. 5. I find being in nature really amazing." = c("1"=0, "2"=1, "3"=2, "4"=3, "5"=6, "6"=10, "7"=17),
+  "9.6. 6. I feel part of nature." = c("1"=0, "2"=1, "3"=2, "4"=4, "5"=7, "6"=13, "7"=23)
+)
+
+# create a new column with weighted scores
+for (col in names(score_lookup)) {
+  weighted_col <- paste0(col, "_score")  # new column name, e.g. "9.1. 1. I always find beauty in nature._score"
+  
+  # Convert responses to character
+  responses <- as.character(data[[col]])
+  
+  # Map responses to weighted scores
+  data[[weighted_col]] <- score_lookup[[col]][responses]
+  
+  # Convert to numeric
+  data[[weighted_col]] <- as.numeric(data[[weighted_col]])
+}
+
+# Calculate total NCI score
+weighted_cols <- paste0(names(score_lookup), "_score")
+data$NCI_score <- rowSums(data[, weighted_cols], na.rm = TRUE)
+data$NCI_score_flipped <- 100 - data$NCI_score
+
+#
+table(data$NCI_score_flipped)
+boxplot(data$NCI_score)
+hist(data$NCI_score_flipped)
+
+data$NCI_group <- cut(
+  data$NCI_score_flipped,
+  breaks = c(-1, 64, 79, 89, 94, 100),
+  labels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+  right = TRUE
+)
+
+#
+ggplot(data, aes(x = NCI_group)) +
+  geom_bar(fill = "#4C9F70", color = "black") +
+  labs(
+    title = "Nature Connection Score Groups",
+    x = "NCI Score Group (Flipped)",
+    y = "Number of Respondents"
+  ) +
+  theme_minimal()
+```
+
+```{r activity summary}
+valid_activities <- c(
+  "Nature watching",
+  "Dog walking",
+  "Exercise (e.g., walking, kayaking, swimming)",
+  "Fishing",
+  "Photography",
+  "Feeding wildlife (e.g., ducks, fish)",
+  "Pond dipping",
+  "Rock pooling"
+)
+
+# Count how many valid activities are in each response
+data$total_activities <- sapply(data$`13. Do you carry out any of these activities around blue spaces?`, function(x) {
+  if (is.na(x) || x == "") return(0)
+  if (grepl("don't carry out any of these activities", x, ignore.case = TRUE)) return(0)
+  
+  # Count how many valid activities are mentioned
+  sum(sapply(valid_activities, function(activity) str_detect(x, fixed(activity))))
+})
+
+# Check the result
+table(data$total_activities)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+
+# Define valid activities
+
+valid_activities <- c(
+  "Nature watching",
+  "Dog walking",
+  "Exercise (e.g., walking, kayaking, swimming)",
+  "Fishing",
+  "Photography",
+  "Feeding wildlife (e.g., ducks, fish)",
+  "Pond dipping",
+  "Rock pooling"
+)
+
+# Function to extract activities from responses
+extract_activities <- function(response_text) {
+  if (is.na(response_text) || response_text == "") return(character(0))
+  if (grepl("don't carry out any of these activities", response_text, ignore.case = TRUE)) return(character(0))
+  
+  activities_present <- valid_activities[sapply(valid_activities, function(activity) {
+    str_detect(response_text, fixed(activity))
+  })]
+  
+  return(activities_present)
+}
+
+
+# Build activities dataset
+
+activities_data <- data.frame(
+  respondent_id = 1:nrow(data),
+  activities_text = data[["13. Do you carry out any of these activities around blue spaces?"]],
+  rivers_canals = data[["10.1. Rivers, canals and dykes_binary"]],
+  park_lakes = data[["10.2. Park lakes_binary"]],
+  coastal = data[["10.3. Coastal areas_binary"]],
+  estuaries = data[["10.4. Estuaries_binary"]],
+  marinas = data[["10.5. Marinas_binary"]]
+)
+
+activities_long <- activities_data %>%
+  rowwise() %>%
+  mutate(activities_list = list(extract_activities(activities_text))) %>%
+  unnest_longer(activities_list, values_to = "activity") %>%
+  filter(!is.na(activity)) %>%
+  ungroup()
+
+# Heatmap data (unweighted)
+
+heatmap_data <- activities_long %>%
+  pivot_longer(cols = c(rivers_canals, park_lakes, coastal, estuaries, marinas), 
+               names_to = "blue_space_type", 
+               values_to = "uses_space") %>%
+  filter(uses_space == 1) %>%
+  group_by(activity, blue_space_type) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(pct_total = n / sum(n) * 100)   # overall %
+
+
+# Weighted preferences
+
+person_activity_prefs <- activities_long %>%
+  pivot_longer(cols = c(rivers_canals, park_lakes, coastal, estuaries, marinas), 
+               names_to = "blue_space_type", 
+               values_to = "uses_space") %>%
+  filter(uses_space == 1) %>%
+  group_by(respondent_id, activity) %>%
+  mutate(total_spaces_for_activity = n()) %>%
+  group_by(activity, blue_space_type) %>%
+  summarise(avg_preference = mean(1/total_spaces_for_activity) * 100, .groups = "drop")
+
+
+# Difference dataset
+difference_data <- heatmap_data %>%
+  left_join(person_activity_prefs, by = c("activity", "blue_space_type")) %>%
+  mutate(delta = avg_preference - pct_total)
+
+
+# Plots
+
+# Unweighted heatmap
+p1 <- ggplot(heatmap_data, aes(x = blue_space_type, y = activity, fill = pct_total)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(round(pct_total, 1), "%")), color = "white", size = 3) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_x_discrete(labels = c("Coastal", "Estuaries", "Marinas", "Park Lakes", "Rivers/Canals")) +
+  labs(title = "Unweighted Activity Preferences",
+       subtitle = "Percent of respondents doing each activity in each blue space",
+       x = "Blue Space Type", 
+       y = "Activity",
+       fill = "% of Respondents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+
+# Weighted heatmap
+p2 <- ggplot(person_activity_prefs, aes(x = blue_space_type, y = activity, fill = avg_preference)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(round(avg_preference, 1), "%")), color = "white", size = 3) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_x_discrete(labels = c("Coastal", "Estuaries", "Marinas", "Park Lakes", "Rivers/Canals")) +
+  labs(title = "Weighted Activity Preferences",
+       subtitle = "Percent of activity use apportioned across selected spaces",
+       x = "Blue Space Type", 
+       y = "Activity",
+       fill = "Weighted %") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+
+# Difference heatmap
+p3 <- ggplot(difference_data, aes(x = blue_space_type, y = activity, fill = delta)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(ifelse(delta > 0, "+", ""), round(delta, 1), "%")), 
+            color = "white", size = 3) +
+  scale_fill_gradient2(low = "red", mid = "white", high = "green", midpoint = 0) +
+  scale_x_discrete(labels = c("Coastal", "Estuaries", "Marinas", "Park Lakes", "Rivers/Canals")) +
+  labs(title = "Difference (Weighted – Unweighted)",
+       subtitle = "Positive = weighted > unweighted, Negative = weighted < unweighted",
+       x = "Blue Space Type", 
+       y = "Activity",
+       fill = "Δ %") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"))
+
+
+# Combine plots
+(p1 | p2) / p3
+
+```
+
+```{r activity plot}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+# Define valid activities
+valid_activities <- c(
+  "Nature watching",
+  "Dog walking",
+  "Exercise (e.g., walking, kayaking, swimming)",
+  "Fishing",
+  "Photography",
+  "Feeding wildlife (e.g., ducks, fish)",
+  "Pond dipping",
+  "Rock pooling"
+)
+
+extract_activities <- function(response_text) {
+  if (is.na(response_text) || response_text == "") return(character(0))
+  if (grepl("don't carry out any of these activities", response_text, ignore.case = TRUE)) return(character(0))
+  
+  valid_activities[sapply(valid_activities, function(activity) {
+    str_detect(response_text, fixed(activity))
+  })]
+}
+
+# Build dataset
+activities_data <- data.frame(
+  respondent_id = 1:nrow(data),
+  activities_text = data[["13. Do you carry out any of these activities around blue spaces?"]],
+  rivers_canals = data[["10.1. Rivers, canals and dykes_binary"]],
+  park_lakes = data[["10.2. Park lakes_binary"]],
+  coastal = data[["10.3. Coastal areas_binary"]],
+  estuaries = data[["10.4. Estuaries_binary"]],
+  marinas = data[["10.5. Marinas_binary"]]
+)
+
+activities_long <- activities_data %>%
+  rowwise() %>%
+  mutate(activities_list = list(extract_activities(activities_text))) %>%
+  unnest_longer(activities_list, values_to = "activity") %>%
+  filter(!is.na(activity)) %>%
+  ungroup()
+
+
+# Function to compute contingency stats with odds ratio
+compute_activity_assoc <- function(activity_long, space_var) {
+  all_respondents <- activities_data$respondent_id
+  
+  # Binary flag for activity
+  activity_flag <- tibble(respondent_id = all_respondents) %>%
+    mutate(activity_flag = respondent_id %in% (activity_long %>% pull(respondent_id)))
+  
+  # Join space selection
+  activity_flag <- activity_flag %>%
+    left_join(activities_data %>% select(respondent_id, !!space_var), by="respondent_id") %>%
+    rename(space_flag = !!space_var)
+  
+  # Contingency table
+  cont_table <- activity_flag %>%
+    group_by(activity_flag, space_flag) %>%
+    summarise(n = n(), .groups="drop") %>%
+    tidyr::complete(activity_flag = c(TRUE,FALSE), space_flag = c(1,0), fill=list(n=0))
+  
+  # Percent in activity / non-activity
+  pct_in_space <- cont_table$n[cont_table$activity_flag==TRUE & cont_table$space_flag==1] / 
+                  sum(cont_table$n[cont_table$activity_flag==TRUE]) * 100
+  pct_non_activity <- cont_table$n[cont_table$activity_flag==FALSE & cont_table$space_flag==1] / 
+                      sum(cont_table$n[cont_table$activity_flag==FALSE]) * 100
+  
+  # Odds ratio (add 0.5 to avoid zero)
+  a <- cont_table$n[cont_table$activity_flag==TRUE & cont_table$space_flag==1] + 0.5
+  b <- cont_table$n[cont_table$activity_flag==TRUE & cont_table$space_flag==0] + 0.5
+  c <- cont_table$n[cont_table$activity_flag==FALSE & cont_table$space_flag==1] + 0.5
+  d <- cont_table$n[cont_table$activity_flag==FALSE & cont_table$space_flag==0] + 0.5
+  odds_ratio <- (a/b)/(c/d)
+  
+  tibble(
+    activity = unique(activity_long$activity),
+    blue_space = space_var,
+    pct_in_space = pct_in_space,
+    pct_non_activity = pct_non_activity,
+    overrep = pct_in_space - pct_non_activity,
+    odds_ratio = odds_ratio
+  )
+}
+
+
+# Apply across all activities × spaces
+spaces <- c("rivers_canals", "park_lakes", "coastal", "estuaries", "marinas")
+
+results <- bind_rows(
+  lapply(valid_activities, function(act) {
+    activity_subset <- activities_long %>% filter(activity == act)
+    bind_rows(lapply(spaces, function(sp) compute_activity_assoc(activity_subset, sp)))
+  })
+)
+
+# Heatmap visualization with odds ratio labels
+ggplot(results, aes(x = blue_space, y = activity, fill = overrep)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(ifelse(overrep>0,"+",""), round(overrep,1), "%\n(OR=", round(odds_ratio,1), ")")), 
+            color="white", size=3) +
+  scale_fill_gradient2(low="black", mid="white", high="red", midpoint=0) +
+  scale_x_discrete(labels = c("Coastal", "Estuaries", "Marinas", "Park Lakes", "Rivers/Canals")) +
+  labs(title="Activity Associations with Blue Spaces",
+       subtitle="Overrepresentation (Δ%) and Odds Ratios (OR) for each activity–space pair",
+       x="Blue Space Type", y="Activity", fill="Δ vs baseline (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45,hjust=1),
+        plot.title = element_text(size=14,face="bold"))
+
+##
+results <- results %>%
+  mutate(overrep_scaled = ifelse(overrep < 0, overrep * 3, overrep))
+
+activity_plot <- ggplot(results, aes(x = blue_space, y = activity, fill = overrep_scaled)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(ifelse(overrep>0,"+",""), round(overrep,1), "%")), 
+            color = "black", size = 3) +
+  scale_fill_gradient2(
+    low = "#9370DB",    # medium purple for negative Δ%
+    mid = "#FFFFFF",    # zero
+    high = "#1F78B4",   # dark blue for positive Δ%
+    midpoint = 0,
+    limits = c(min(results$overrep_scaled, na.rm = TRUE), max(results$overrep_scaled, na.rm = TRUE)),
+    space = "Lab"
+  ) +
+  scale_x_discrete(labels = c("Coastal", "Estuaries", "Marinas", "Park Lakes", "Rivers/Canals")) +
+  labs(
+    title = "Activity Associations with Blue Spaces",
+    subtitle = "Tile color = Δ% overrepresentation, labels = Δ%",
+    x = "Blue Space Type",
+    y = "Activity",
+    fill = "Δ vs baseline (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 14, face = "bold")
+  )
+
+# Save the plot at 300 dpi
+ggsave(
+  filename = "activity_heatmap.png",
+  plot = activity_plot,
+  width = 8,       # width in inches
+  height = 6,      # height in inches
+  dpi = 600
+)
+```
+
+```{r remove entries}
+#data <- data[data$`6. Please click the item that best describes the neighbourhood you live in:` != 
+             #"Rural (i.e., mostly countryside with few houses or buildings)", ]
+
+# remove other genders
+# data <- data[data$`3. What is your gender?` != 
+             "Other", ]
+```
+
+```{r provision}
+data$provision <- ifelse(
+  data$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?` == "I already do",
+  "Yes",
+  ifelse(
+    data$`18. Would you consider providing a blue space (e.g., large nature pond or mini bucket pond) in your garden, allotment or other available outdoor space?` == "I would if I had the space",
+    "Provisional_Yes",
+    "Maybe_No"
+  )
+)
+
+# Set factor levels
+data$provision <- factor(data$provision, levels = c("Maybe_No", "Provisional_Yes", "Yes"))
+
+table(data$provision)
+```
+
+```{r nature connection composite}
+#
+data$env_charity_member_num <- ifelse(data$`7. Are you a member of an environmental charity or community group? (i.e., RSPB, \"Friends of\" group)` == "Yes", 1, 0)
+data$nature_recording_num <- ifelse(data$`8. Do you participate in any form of nature recording? (e.g., via apps iNaturalist, Seek, Merlin or as an amateur naturalist)` == "Yes", 1, 0)
+
+# Scale variables (z-score)
+data$NCI_z <- as.numeric(scale(data$NCI_score_flipped))
+data$charity_z <- as.numeric(scale(data$env_charity_member_num))
+data$recording_z <- as.numeric(scale(data$nature_recording_num))
+
+# Create composite score by summing scaled variables
+data$composite_score <- data$NCI_z + data$charity_z + data$recording_z
+
+# Check summary and distribution
+summary(data$composite_score)
+hist(data$composite_score, breaks = 50, main = "Composite Score Distribution")
+table(data$composite_score)
+
+# Define your custom breaks
+custom_breaks <- c(-Inf, -1.0, 1.0, Inf)
+
+# Plot histogram
+hist(data$composite_score,
+     breaks = 50,
+     main = "Composite Score Distribution",
+     xlab = "Composite Score",
+     col = "lightgray",
+     border = "white",
+     xlim = c(-3, 3))  
+
+# Add vertical lines for breaks
+abline(v = custom_breaks, col = c("red", "blue", "blue"), lty = 4, lwd = 2)
+
+
+ggplot(data, aes(x = composite_score, fill = factor(env_charity_member_num))) + 
+  geom_histogram(position="identity", alpha=0.5, bins=0) +
+  theme_minimal() + labs(fill="Env Charity Member")
+
+ggplot(data, aes(x = composite_score, fill = factor(nature_recording_num))) + 
+  geom_histogram(position = "identity", alpha = 0.5, bins = 40) +
+  theme_minimal() + 
+  labs(fill = "Nature Recording", x = "Composite Score", y = "Count",
+       title = "Composite Score Distribution by Nature Recording Status")
+
+# Adjust -1.5 and 0.5 as needed based on your histogram
+data$connection_group <- cut(
+  data$composite_score,
+  breaks = c(-Inf, -1.0, 1.0, Inf),
+  labels = c("Low", "Medium", "High"),
+  right = TRUE
+)
+
+# Check group counts
+table(data$connection_group)
+
+ggplot(data, aes(x = connection_group, y = composite_score, fill = connection_group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(
+    title = "Composite Score by Manually Defined Nature Connection Group",
+    x = "Nature Connection Group",
+    y = "Composite Score"
+  ) +
+  scale_fill_brewer(palette = "Pastel1")
+```
+
+```{r attitude to blue space}
+psych::alpha(data[, c("12.1. Cities should have more blue spaces", "12.2. Blue spaces are important for nature", "12.3. Blue spaces in the UK are in poor condition", "12.4. Blue spaces are important for my health and wellbeing", "12.5. We should “rewild” UK blue spaces")])
+
+# composite
+# Reverse code '12.3'
+data$`12.3_reversed` <- 8 - data$`12.3. Blue spaces in the UK are in poor condition`
+
+# reverse 12.3
+psych::alpha(data[, c(
+  "12.1. Cities should have more blue spaces", 
+  "12.2. Blue spaces are important for nature",
+  "12.3_reversed", 
+  "12.4. Blue spaces are important for my health and wellbeing", 
+  "12.5. We should “rewild” UK blue spaces"
+)])
+
+# remove 12.3
+psych::alpha(data[, c(
+  "12.1. Cities should have more blue spaces", 
+  "12.2. Blue spaces are important for nature",
+  "12.4. Blue spaces are important for my health and wellbeing", 
+  "12.5. We should “rewild” UK blue spaces"
+)])
+
+# Calculate composite mean score (remove negative statement)
+data$blue_space_attitude <- rowMeans(data[, c(
+  "12.1. Cities should have more blue spaces", 
+  "12.2. Blue spaces are important for nature", 
+  "12.4. Blue spaces are important for my health and wellbeing", 
+  "12.5. We should “rewild” UK blue spaces"
+)], na.rm = TRUE)
+```
+
+```{r remove respondent (optional)}
+#data <- data[data$`6. Please click the item that best describes the neighbourhood you live in:` != 
+             #"Rural (i.e., mostly countryside with few houses or buildings)", ]
+```
+
+```{r model data}
+angus <- data[157,]
+ol1 <- data[34,]
+ol2 <- data[127,]
+
+# remove other genders
+model_data <- data[data$`3. What is your gender?` != 
+             "Other", ]
+
+# Write to Excel file without modifying column names or row names
+write_xlsx(model_data, "model_data.xlsx")
+```
+
+```{r postcode preperation}
+# Clean and standardize data postcodes
+data$postcode_clean <- toupper(trimws(data$`5. What are the first 3 digits of your postcode? (e.g., HU5, YO1).`))
+data$postcode_clean <- gsub("^([A-Z0-9]{2,4}).*", "\\1", data$postcode_clean)
+
+# Read and prepare post_codes
+post_codes <- read.csv("post_codes.csv")
+post_codes$outward_code <- sub(" .*", "", post_codes$postcode)
+unique_post_codes <- post_codes[!duplicated(post_codes$outward_code), ]
+colnames(unique_post_codes)[colnames(unique_post_codes) == "outward_code"] <- "postcode_clean"
+
+# Fix known postcode errors in data
+postcodes <- data$postcode_clean
+postcodes <- ifelse(postcodes == "Y01", "YO1", postcodes)
+postcodes <- ifelse(postcodes == "YO2", "YO21", postcodes)
+postcodes <- ifelse(postcodes == "YO4", "YO41", postcodes)
+postcodes <- ifelse(postcodes == "M66", "M6", postcodes)
+data$postcode_clean <- postcodes
+
+# Remove rows with HY17 or NA
+data_clean <- data[!(data$postcode_clean %in% c("HY17","NO") | is.na(data$postcode_clean)), ]
+
+# Update keys_data after cleaning
+keys_data <- data_clean$postcode_clean
+keys_unique <- unique_post_codes$postcode_clean
+
+# Check missing postcodes again if needed
+missing_in_unique <- setdiff(keys_data, keys_unique)
+missing_in_data <- setdiff(keys_unique, keys_data)
+
+# Merge (inner join)
+merged_data <- merge(data_clean, unique_post_codes, 
+                     by = "postcode_clean",
+                     all.x = FALSE)
+
+head(merged_data)
+
+write.csv(merged_data, "survey_map.csv")
+
+```
+

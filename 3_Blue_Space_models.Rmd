@@ -1,0 +1,1579 @@
+---
+title: "Blue Space for Nature"
+author: "Matthew Morgan"
+date: "2025-05-16"
+output: html_document
+---
+
+```{r load packages}
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(MASS)
+library(broom)
+library(car)
+library(pscl)
+library(tibble)
+library(car)
+library(lmtest)
+library(knitr)
+library(broom)
+library(patchwork)
+library(DHARMa)
+library(forcats)
+library(SuppDists)
+library(brant)  
+library(ordinal)
+library(corrplot)
+library(gghalves)
+```
+
+```{r load data from directory}
+model_data <- read_excel("model_data.xlsx")
+```
+
+```{r variable diagnostics}
+# dependent variables
+table(model_data$connection_group)
+table(model_data$provision)
+table(model_data$`6. Please click the item that best describes the neighbourhood you live in:`)
+hist(model_data$blue_space_attitude) # left skew
+
+# independent variables numeric
+hist(model_data$`2. What is your current age in years?`) # normal
+hist(model_data$total_activities) # right skew
+hist(model_data$blue_space_total_frequency) # right skew
+hist(model_data$blue_space_mean_frequency) # right skew
+hist(model_data$`12.3. Blue spaces in the UK are in poor condition`)
+table(model_data$`6. Please click the item that best describes the neighbourhood you live in:`)
+table(model_data$`3. What is your gender?`)
+```
+
+```{r ordered_factors}
+questions <- colnames(model_data)
+questions
+
+hist(model_data$composite_score)
+
+model_data <- model_data %>%
+  rename(
+    heard_rewilding = `11. Have you heard of the term "rewilding"?`, #yes/no
+    blue_space_condition = `12.3. Blue spaces in the UK are in poor condition`, # likert 1-7
+    neighbourhood = `6. Please click the item that best describes the neighbourhood you live in:`, # categorical
+    age = `2. What is your current age in years?` # continuous
+  )
+
+# varaiable structure
+str(model_data$heard_rewilding)
+str(model_data$blue_space_condition)
+str(model_data$neighbourhood)
+str(model_data$gender)
+str(model_data$age)
+str(model_data$age_factor)
+str(model_data$total_activities)
+str(model_data$provision)
+str(model_data$blue_space_attitude)
+
+# Convert to factors
+model_data$heard_rewilding <- factor(model_data$heard_rewilding)
+model_data$neighbourhood <- factor(model_data$neighbourhood)
+model_data$gender <- factor(model_data$gender)
+model_data$age_factor <- ordered(model_data$age_factor, levels = c("1", "2", "3", "4"))
+model_data$provision <- factor(model_data$provision, levels = c("Maybe_No", "Provisional_Yes", "Yes"), ordered = TRUE)
+model_data$connection_group <- factor(model_data$connection_group, levels = c("Low", "Medium", "High"),ordered = TRUE)
+
+# correlation matrix
+# Specify the numeric variables of interest
+
+vars_to_correlate <- c(
+  "blue_space_attitude",
+  "blue_space_mean_frequency",
+  "blue_space_num_visited",
+  "total_activities",
+  "age",
+  "blue_space_condition"
+)
+
+# Subset the data to just those variables
+subset_data <- model_data[, vars_to_correlate]
+
+# Step 1: Convert ordered factor to numeric
+subset_data <- subset_data %>%
+  mutate(blue_space_condition_num = as.numeric(blue_space_condition))
+
+subset_data_for_cor <- subset_data %>%
+  dplyr::select(-blue_space_condition) %>%
+  dplyr::rename(blue_space_condition = blue_space_condition_num)
+
+
+# Compute Spearman correlation (better for ordinal data)
+cor_matrix <- cor(subset_data_for_cor, use = "pairwise.complete.obs", method = "spearman")
+
+print(cor_matrix)
+
+# Optional: visualize with corrplot if installed
+if (!require(corrplot)) install.packages("corrplot")
+library(corrplot)
+
+corrplot(cor_matrix, method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45,
+         addCoef.col = "black", 
+         number.cex = 0.6,
+         diag = FALSE)
+
+# remove outliers
+# clean_data <- model_data[-c(2, 1, 33, 125), ]# optional but chose not too.
+```
+
+## Nature Connection and Engagement
+
+```{r nature connection predictors model FULL}
+#
+lm_model <- lm(
+  rep(1, nrow(model_data )) ~ 
+    connection_group +
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    neighbourhood +
+    gender  +
+    age +
+    provision +
+    blue_space_attitude,
+  data = model_data 
+)
+
+# 
+vif(lm_model)
+
+
+# regression model
+sig_model1 <- polr(
+  connection_group ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    neighbourhood +
+    gender  +
+    age +
+    provision +
+    blue_space_attitude,
+  data = model_data ,
+  Hess = TRUE
+)
+
+# Summary of the model
+summary(sig_model1)
+brant(sig_model1)
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(sig_model1))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final, digits = 3)
+
+
+#
+pR2(sig_model1)  # replace att_model with your model object name
+null_model <- polr(connection_group ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, sig_model1)
+
+# Residual deviance and degrees of freedom
+deviance(sig_model1)
+df.residual(sig_model1)
+```
+
+```{r nature connection predictors MIUNS gender}
+# regression model
+sig_model2 <- polr(
+  connection_group ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    neighbourhood +
+    age +
+    provision +
+    blue_space_attitude,
+  data = model_data ,
+  Hess = TRUE
+)
+
+# Summary of the model
+summary(sig_model2)
+brant(sig_model2)
+AIC(sig_model1, sig_model2)
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(sig_model2))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final, digits = 3)
+
+#
+pR2(sig_model2)  # replace att_model with your model object name
+null_model <- polr(connection_group ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, sig_model2)
+
+# Residual deviance and degrees of freedom
+deviance(sig_model2)
+df.residual(sig_model2)
+```
+
+```{r nature connection predictors MIUNS gender & neighbourhood}
+# regression model
+sig_model3 <- polr(
+  connection_group ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    age +
+    provision +
+    blue_space_attitude,
+  data = model_data ,
+  Hess = TRUE
+)
+
+AIC(sig_model1, sig_model2, sig_model3)
+
+# Summary of the model
+summary(sig_model3)
+brant(sig_model3)
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(sig_model3))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final <- cbind(
+  `Estimate` = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final, digits = 3)
+
+# Model checks
+null_model <- polr(connection_group ~ 1, data = model_data, Hess = TRUE)
+anova(sig_model3, null_model, test = "Chisq")
+brant(sig_model3)
+pR2(sig_model3)  # replace att_model with your model object name
+AIC(sig_model1, sig_model2, sig_model3)
+
+# Residual deviance and degrees of freedom
+deviance(sig_model3)
+df.residual(sig_model3)
+```
+
+```{r nature connection predictors MIUNS gender & neighbourhood & age}
+#
+model_data$blue_space_condition_num <-
+  as.numeric(as.character(model_data$blue_space_condition))
+
+
+# regression model
+sig_model4 <- polr(
+  connection_group ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    provision +
+    blue_space_attitude,
+  data = model_data ,
+  Hess = TRUE
+)
+
+AIC(sig_model1, sig_model2, sig_model3, sig_model4) # model 4 is the most parsimonious 
+
+# Summary of the model
+summary(sig_model4)
+brant(sig_model4)
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(sig_model4))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final <- cbind(
+  `Estimate` = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final, digits = 3)
+
+# Model checks
+null_model <- polr(connection_group ~ 1, data = model_data, Hess = TRUE)
+anova(sig_model3, null_model, test = "Chisq")
+brant(sig_model3)
+pR2(sig_model3)  # replace att_model with your model object name
+AIC(sig_model1, sig_model2, sig_model3)
+
+# Residual deviance and degrees of freedom
+deviance(sig_model3)
+df.residual(sig_model3)
+```
+
+```{r forest plot nature connection}
+# 
+coef_table <- coef(summary(sig_model4))
+coef_table
+
+# Calculate p-values from t-values
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+#  Add p-values to the coef_table
+coef_table <- cbind(coef_table, "p value" = p_values)
+
+# Create a data frame with CIs and significance flag
+coef_df <- coef_table %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Predictor") %>%
+  mutate(
+    lower = Value - 1.96 * `Std. Error`,
+    upper = Value + 1.96 * `Std. Error`,
+    signif = ifelse(`p value` < 0.05, "Significant", "Not significant")
+  )
+
+#
+coef_df <- coef_df %>%
+  filter(!Predictor %in% c("blue_space_condition.Q", 
+"blue_space_condition.C",
+"blue_space_condition^4",
+"blue_space_condition^5",
+"blue_space_condition^6", 
+"Low|Medium", 
+"Medium|High",
+"provision.Q"))
+
+rename_map <- c(
+  "blue_space_condition" = "Perceived UK blue spaces to be in poor condition",
+  "blue_space_mean_frequency" = "Blue space visit mean frequency",
+  "blue_space_num_visited" = "Number of different blue spaces visited",
+  "total_activities" = "Number of blue space activities",
+  "provision.L" = "Willingness to provide a blue space",
+  "blue_space_attitude" = "Positive blue space attitude"
+)
+
+#
+coef_df <- coef_df %>%
+  mutate(
+    Predictor_clean = rename_map[Predictor],
+    Predictor_clean = ifelse(is.na(Predictor_clean), Predictor, Predictor_clean)
+  )
+
+# Then convert to factor with all desired levels (including missing ones)
+all_levels <- c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+)
+
+# Ensure Predictor_clean is a factor with the full set of levels
+coef_df$Predictor_clean <- factor(coef_df$Predictor_clean, levels = c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+))
+
+# Check if "Nature connection and engagement" exists as data row, if not add dummy row
+if (!("Nature connection and engagement" %in% coef_df$Predictor_clean)) {
+  coef_df <- bind_rows(coef_df, 
+    tibble(
+      Predictor_clean = factor("Nature connection and engagement", levels = levels(coef_df$Predictor_clean)),
+      Value = NA_real_,
+      lower = NA_real_,
+      upper = NA_real_,
+      signif = NA_character_
+    )
+  )
+}
+
+p1 <- ggplot(coef_df, aes(x = factor(Predictor_clean, levels = c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+)), y = Value, color = signif)
+) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Nature Connection",
+    x = "Predictor",
+    y = "Estimate (link scale)",
+    color = "Significance"
+  ) +
+  theme_bw() +
+  scale_color_manual(values = c("Significant" = "#0072B2", "Not significant" = "grey60"))
+p1
+```
+
+## Willingness to share model
+
+```{r willingness to share FULL model}
+#
+lm_model_vif1 <- lm(
+  rep(1, nrow(model_data)) ~ 
+    provision +
+    heard_rewilding +
+    gender +
+    neighbourhood +
+    blue_space_total_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    connection_group +
+    blue_space_attitude +
+    age,
+  data = model_data
+)
+vif(lm_model_vif1)
+
+# Fit the logistic regression model
+prov_model1 <- polr(
+  provision ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    neighbourhood +
+    gender +
+    age +
+    blue_space_attitude +
+    connection_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+# Model summary
+summary(prov_model1)
+brant(prov_model1)
+
+# Calculate p-values
+coef_table <- coef(summary(prov_model1))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Exponentiate coefficients to get odds ratios
+odds_ratios <- exp(coef(prov_model1))
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(prov_model1))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final1 <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final1, digits = 3)
+
+
+#
+pR2(prov_model1)
+null_model <- polr(provision ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, prov_model1)
+
+
+# Residual deviance and degrees of freedom
+deviance(prov_model1)
+df.residual(prov_model1)
+```
+
+```{r willingness to share MINUS gender}
+# Fit the logistic regression model
+prov_model2 <- polr(
+  provision ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    neighbourhood +
+    age +
+    blue_space_attitude +
+    connection_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+# Model summary
+summary(prov_model2)
+brant(prov_model2)
+
+# Calculate p-values
+coef_table <- coef(summary(prov_model2))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Exponentiate coefficients to get odds ratios
+odds_ratios <- exp(coef(prov_model2))
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(prov_model1))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final1 <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final1, digits = 3)
+
+#
+pR2(prov_model1)
+null_model <- polr(provision ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, prov_model2)
+
+
+# Residual deviance and degrees of freedom
+deviance(prov_model2)
+df.residual(prov_model2)
+
+AIC(prov_model1, prov_model2)
+```
+
+```{r willingness to share MINUS gender & neighbourhood}
+# Fit the logistic regression model
+prov_model3 <- polr(
+  provision ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    age +  
+    blue_space_attitude +
+    connection_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+# Model summary
+summary(prov_model3)
+brant(prov_model3)
+
+
+# Calculate p-values
+coef_table <- coef(summary(prov_model3))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Exponentiate coefficients to get odds ratios
+odds_ratios <- exp(coef(prov_model3))
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(prov_model3))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final1 <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final1, digits = 3)
+
+#
+pR2(prov_model3)
+null_model <- polr(provision ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, prov_model3)
+
+
+# Residual deviance and degrees of freedom
+deviance(prov_model3)
+df.residual(prov_model3)
+
+AIC(prov_model1, prov_model2, prov_model3)
+```
+
+```{r willingness to share MINUS gender & neighbourhood & age}
+# Fit the logistic regression model
+prov_model4 <- polr(
+  provision ~ 
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    blue_space_attitude +
+    connection_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+# Model summary
+summary(prov_model4)
+brant(prov_model4)
+
+# Exponentiate coefficients to get odds ratios
+odds_ratios <- exp(coef(prov_model4))
+
+# Step 1: Coefficient table with p-values
+coef_table <- coef(summary(prov_model4))
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+# Step 2: Remove threshold/intercept rows
+coef_table_no_thresh <- coef_table[!grepl("\\|", rownames(coef_table)), ]
+
+# Step 3: Calculate odds ratios only for predictors
+odds_ratios <- exp(coef_table_no_thresh[, "Value"])
+
+# Step 4: Combine into a clean table
+coef_table_final1 <- cbind(
+  Estimate = coef_table_no_thresh[, "Value"],
+  `Std. Error` = coef_table_no_thresh[, "Std. Error"],
+  `t value` = coef_table_no_thresh[, "t value"],
+  `p value` = pnorm(abs(coef_table_no_thresh[, "t value"]), lower.tail = FALSE) * 2,
+  `Odds Ratio` = odds_ratios
+)
+
+# Step 5: Display
+kable(coef_table_final1, digits = 3)
+
+#
+pR2(prov_model3)
+null_model <- polr(provision ~ 1, data = model_data, Hess = TRUE)
+anova(null_model, prov_model4)
+
+
+# Residual deviance and degrees of freedom
+deviance(prov_model4)
+df.residual(prov_model4)
+
+AIC(prov_model1, prov_model2, prov_model3, prov_model4)
+#
+```
+
+```{r forest plot willingness 4}
+# 
+coef_table <- coef(summary(prov_model4))
+coef_table
+
+# Calculate p-values from t-values
+p_values <- pnorm(abs(coef_table[, "t value"]), lower.tail = FALSE) * 2
+
+#  Add p-values to the coef_table
+coef_table <- cbind(coef_table, "p value" = p_values)
+
+# Create a data frame with CIs and significance flag
+coef_df <- coef_table %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Predictor") %>%
+  mutate(
+    lower = Value - 1.96 * `Std. Error`,
+    upper = Value + 1.96 * `Std. Error`,
+    signif = ifelse(`p value` < 0.05, "Significant", "Not significant")
+  )
+
+#
+coef_df <- coef_df %>%
+  filter(!Predictor %in% c("Maybe_No|Provisional_Yes", "Provisional_Yes|Yes",
+"blue_space_condition.Q", 
+"blue_space_condition.C",
+"blue_space_condition^4",
+"blue_space_condition^5",
+"blue_space_condition^6", 
+"connection_group.Q"))
+
+# Define your levels explicitly (including all predictors)
+all_levels <- c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+)
+
+# Map raw predictor names to clean labels
+rename_map <- c(
+  "blue_space_condition" = "Perceived UK blue spaces to be in poor condition",
+  "blue_space_mean_frequency" = "Blue space visit mean frequency",
+  "blue_space_num_visited" = "Number of different blue spaces visited",
+  "total_activities" = "Number of blue space activities",
+  "provision.L" = "Willingness to provide a blue space",
+  "blue_space_attitude" = "Positive blue space attitude",
+  "connection_group.L" = "Nature connection and engagement"
+)
+
+# Add clean labels and set factor levels
+coef_df <- coef_df %>%
+  mutate(
+    Predictor_clean = rename_map[Predictor],
+    Predictor_clean = ifelse(is.na(Predictor_clean), Predictor, Predictor_clean),
+    Predictor_clean = factor(Predictor_clean, levels = all_levels)
+  )
+
+# Add a blank row if "Willingness to provide a blue space" is missing
+if (!"Willingness to provide a blue space" %in% coef_df$Predictor_clean) {
+  coef_df <- bind_rows(coef_df, tibble(
+    Predictor_clean = factor("Willingness to provide a blue space", levels = all_levels),
+    Value = NA_real_,
+    lower = NA_real_,
+    upper = NA_real_,
+    signif = NA_character_
+  ))
+}
+p2 <- ggplot(coef_df, aes(x = factor(Predictor_clean, levels = c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+)), y = Value, color = signif)
+) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Provide Blue Space",
+    x = "Predictor",
+    y = "",
+    color = "Significance"
+  ) +
+  theme_bw() +
+  scale_color_manual(values = c("Significant" = "#0072B2", "Not significant" = "grey60"))
+p2
+
+## Participants who believe blue spaces are in poorer condition tend to report lower nature connection/Participants who view blue spaces as being in good condition tend to feel more connected to nature.
+```
+
+## Blue space attitude model 
+
+```{r attitude model FULL}
+# Variance Inflation Factor to check multicollinearity
+lm_model_vif <- lm(
+  rep(1, nrow(model_data)) ~ 
+    blue_space_attitude +
+    heard_rewilding +
+    gender +
+    neighbourhood +
+    blue_space_mean_frequency +
+    blue_space_num_visited +
+    total_activities +
+    blue_space_condition +
+    provision +
+    connection_group +
+    age,
+  data = model_data
+)
+print(vif(lm_model_vif))
+
+# reflect 
+model_data$blue_space_attitude_reflect <- max(model_data$blue_space_attitude, na.rm = TRUE) + 1 - model_data$blue_space_attitude
+hist(model_data$blue_space_attitude_reflect)
+
+# Fit Gamma GLM
+glm_model_gamma <- glm(blue_space_attitude_reflect ~ 
+                        blue_space_mean_frequency +
+                        blue_space_num_visited +
+                        total_activities +
+                        gender + 
+                        blue_space_condition +
+                        neighbourhood + 
+                        age +
+                        provision +
+                        connection_group,
+                        family = Gamma(link = "log"), data = model_data)
+ 
+# Fit Inverse Gaussian GLM
+glm_model_inv_gauss <- glm(blue_space_attitude_reflect ~ 
+                            blue_space_mean_frequency +
+                            blue_space_num_visited +
+                            total_activities +
+                            gender + 
+                            blue_space_condition +
+                            neighbourhood + 
+                            age +
+                            provision +
+                            blue_space_condition,
+                            family = inverse.gaussian(link = "log"), data = model_data)
+
+# Summaries
+summary(glm_model_gamma)
+summary(glm_model_inv_gauss)
+
+# Model comparison using AIC
+aic_gamma <- AIC(glm_model_gamma)
+aic_inv_gauss <- AIC(glm_model_inv_gauss)
+print(paste("AIC Gamma model:", round(aic_gamma, 2)))
+print(paste("AIC Inverse Gaussian model:", round(aic_inv_gauss, 2)))
+
+# Plot diagnostics for inverse Gaussian model
+plot(glm_model_inv_gauss)
+
+#
+null_model <- glm(blue_space_attitude_reflect ~ 1, 
+                  family = inverse.gaussian(link = "log"), 
+                  data = model_data)
+anova(null_model, glm_model_inv_gauss, test = "Chisq")
+
+# Pseudo R² for inverse Gaussian model
+null_dev <- glm_model_inv_gauss$null.deviance
+res_dev <- glm_model_inv_gauss$deviance
+pseudo_r2 <- 1 - (res_dev / null_dev)
+print(paste("Pseudo R-squared:", round(pseudo_r2, 4)))
+
+# Tidy the model output
+model_tidy <- tidy(glm_model_inv_gauss)
+
+#
+kable(model_tidy, digits = 3, caption = "Inverse Gaussian GLM Summary")
+
+#
+sim_res <- simulateResiduals(glm_model_inv_gauss)
+plot(sim_res)
+testUniformity(sim_res)   # Should return non-significant
+testDispersion(sim_res)   # Non-significant = good
+testOutliers(sim_res)     # Checks for unusual points
+
+```
+
+```{r attitude model MINUS Gender}
+# Fit Inverse Gaussian GLM
+glm_model_inv_gauss1 <- glm(blue_space_attitude_reflect ~ 
+                            blue_space_mean_frequency +
+                            blue_space_num_visited +
+                            total_activities +
+                            blue_space_condition +
+                            neighbourhood + 
+                            age +
+                            provision +
+                            connection_group,
+                            family = inverse.gaussian(link = "log"), data = model_data)
+
+# Summary
+summary(glm_model_inv_gauss1)
+AIC(glm_model_inv_gauss1, glm_model_inv_gauss)
+
+# Plot diagnostics for inverse Gaussian model
+par(mfrow = c(2, 2))
+plot(glm_model_inv_gauss1)
+
+#
+null_model <- glm(blue_space_attitude_reflect ~ 1, 
+                  family = inverse.gaussian(link = "log"), 
+                  data = model_data)
+anova(null_model, glm_model_inv_gauss1, test = "Chisq")
+
+# Pseudo R² for inverse Gaussian model
+null_dev <- glm_model_inv_gauss1$null.deviance
+res_dev <- glm_model_inv_gauss1$deviance
+pseudo_r2 <- 1 - (res_dev / null_dev)
+print(paste("Pseudo R-squared:", round(pseudo_r2, 4)))
+
+#
+sim_res <- simulateResiduals(glm_model_inv_gauss1)
+plot(sim_res)
+testUniformity(sim_res)   # Should return non-significant
+testDispersion(sim_res)   # Non-significant = good
+testOutliers(sim_res)     # Checks for unusual points
+
+
+```
+
+```{r attitude model MINUS Gender & neighbourhood}
+# Fit Inverse Gaussian GLM
+glm_model_inv_gauss2 <- glm(blue_space_attitude_reflect ~ 
+                            blue_space_total_frequency +
+                            blue_space_num_visited +
+                            total_activities +
+                            blue_space_condition +
+                            age +
+                            provision +
+                            connection_group,
+                            family = inverse.gaussian(link = "log"), data = model_data)
+
+# Summaries
+summary(glm_model_inv_gauss2)
+AIC(glm_model_inv_gauss1, glm_model_inv_gauss2, glm_model_inv_gauss)
+
+# Plot diagnostics for inverse Gaussian model
+par(mfrow = c(2, 2))
+plot(glm_model_inv_gauss2)
+
+#
+null_model <- glm(blue_space_attitude_reflect ~ 1, 
+                  family = inverse.gaussian(link = "log"), 
+                  data = model_data)
+anova(null_model, glm_model_inv_gauss2, test = "Chisq")
+
+# Pseudo R² for inverse Gaussian model
+null_dev <- glm_model_inv_gauss2$null.deviance
+res_dev <- glm_model_inv_gauss2$deviance
+pseudo_r2 <- 1 - (res_dev / null_dev)
+print(paste("Pseudo R-squared:", round(pseudo_r2, 4)))
+
+#
+sim_res <- simulateResiduals(glm_model_inv_gauss2)
+plot(sim_res)
+testUniformity(sim_res)   # Should return non-significant
+testDispersion(sim_res)   # Non-significant = good
+testOutliers(sim_res)     # Checks for unusual points
+
+```
+
+```{r attitude model MINUS Gender & neighbourhood & age}
+# Fit Inverse Gaussian GLM (over dispersed)
+glm_model_inv_gauss3 <- glm(blue_space_attitude_reflect ~ 
+                            blue_space_mean_frequency +
+                            blue_space_num_visited +
+                            total_activities +
+                            blue_space_condition +
+                            provision +
+                            connection_group,
+                            family = inverse.gaussian(link = "log"), data = model_data)
+
+
+# Summary
+summary(glm_model_inv_gauss3)
+
+AIC(glm_model_inv_gauss, glm_model_inv_gauss1, glm_model_inv_gauss2, glm_model_inv_gauss3)
+
+# Plot diagnostics for inverse Gaussian model
+par(mfrow = c(2, 2))
+plot(glm_model_inv_gauss3)
+
+#
+null_model <- glm(blue_space_attitude_reflect ~ 1, 
+                  family = inverse.gaussian(link = "log"), 
+                  data = model_data)
+anova(null_model, glm_model_inv_gauss3, test = "Chisq")
+
+# Pseudo R² for inverse Gaussian model
+null_dev <- glm_model_inv_gauss3$null.deviance
+res_dev <- glm_model_inv_gauss3$deviance
+pseudo_r2 <- 1 - (res_dev / null_dev)
+print(paste("Pseudo R-squared:", round(pseudo_r2, 4)))
+
+#
+sim_res <- simulateResiduals(glm_model_inv_gauss3)
+plot(sim_res)
+testUniformity(sim_res)   # Should return non-significant
+testDispersion(sim_res)   # Non-significant = good
+testOutliers(sim_res)     # Checks for unusual points
+# slightly under dispersed but otherwise fineggsave("dharma_plot.png", sim_res = dh, width = 16, height = 8, dpi = 400)
+```
+
+```{r attitude plot}
+# Summary
+summary(glm_model_inv_gauss3)
+
+# Define full set of labels (including the missing one)
+term_labels <- c(
+  "blue_space_mean_frequency" = "Blue space visit mean frequency",
+  "blue_space_num_visited" = "Number of different blue spaces visited",
+  "total_activities" = "Number of blue space activities",
+  "blue_space_condition" = "Perceived UK blue spaces to be in poor condition",
+  "connection_group.L" = "Nature connection and engagement",
+  "provision.L" = "Willingness to provide a blue space",
+  "blue_space_attitude" = "Positive blue space attitude"  # <-- added
+)
+
+# Full desired order
+all_levels <- c(
+  "Blue space visit mean frequency",
+  "Number of different blue spaces visited",
+  "Number of blue space activities",
+  "Perceived UK blue spaces to be in poor condition",
+  "Nature connection and engagement",
+  "Willingness to provide a blue space",
+  "Positive blue space attitude"
+)
+
+# Process model output
+inv_gauss_tidy <- tidy(glm_model_inv_gauss3) %>%
+  filter(term != "(Intercept)") %>%
+  filter(term %in% names(term_labels)) %>%
+  mutate(
+    estimate = -estimate,
+    sig = ifelse(p.value < 0.05, "p < 0.05", "n.s."),
+    term_clean = term_labels[term]
+  )
+
+# Add blank row if missing
+if (!"Positive blue space attitude" %in% inv_gauss_tidy$term_clean) {
+  inv_gauss_tidy <- bind_rows(inv_gauss_tidy, tibble(
+    term_clean = "Positive blue space attitude",
+    estimate = NA_real_,
+    std.error = NA_real_,
+    sig = NA_character_
+  ))
+}
+
+# Ensure correct ordering
+inv_gauss_tidy <- inv_gauss_tidy %>%
+  mutate(term_clean = factor(term_clean, levels = all_levels))
+inv_gauss_tidy
+# Plot
+p3 <- ggplot(inv_gauss_tidy, aes(x = term_clean, y = estimate, color = sig)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  scale_color_manual(values = c("p < 0.05" = "#0072B2", "n.s." = "grey60"), na.value = "grey90") +
+  coord_flip() +
+  labs(
+    title = "Positive attitude towards blue space",
+    x = NULL,
+    y = "",
+    color = "Significance"
+  ) +
+  theme_bw(base_size = 14)
+
+print(p3)
+
+```
+
+## Final model plot
+
+```{r final plot}
+library(ggplot2)
+library(patchwork)
+
+# 
+base_clean_theme <- theme_bw() +
+  theme(
+    plot.title   = element_text(hjust = 0.5, colour = "black", face = "bold", size = 14),
+    axis.title.x = element_text(size = 16, colour = "black"),
+    axis.text.x  = element_text(size = 14, colour = "black"),
+    legend.position = "none"
+  )
+
+# 
+p1_clean <- p1 +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Nature connection and engagement") +
+  base_clean_theme +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+p2_clean <- p2 +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Willingness to provide blue space") +
+  base_clean_theme +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+p3_clean <- p3 +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Positive blue space attitude") +
+  base_clean_theme +
+  theme(
+    axis.title.y = element_text(size = 16, colour = "black"),
+    axis.text.y  = element_text(size = 14, colour = "black")
+  )
+
+# 
+combined_plot <- p3_clean + p1_clean + p2_clean +
+  plot_layout(ncol = 3)
+
+combined_plot
+
+#
+ggsave("combined_plot.png", plot = combined_plot, width = 16, height = 8, dpi = 400)
+```
+
+## Attitudes plot
+
+```{r diverging bar plot blue attitude}
+attitude_plot <- read_csv("attitude_plot.csv")
+View(attitude_plot)
+
+# Pivot to long format
+# Specify exact columns instead of starts_with
+long_data <- attitude_plot %>%
+  pivot_longer(
+    cols = c(
+      "12.1. Cities should have more blue spaces",
+      "12.2. Blue spaces are important for nature",
+      "12.3. Blue spaces in the UK are in poor condition",
+      "12.4. Blue spaces are important for my health and wellbeing",
+      "12.5. We should “rewild” UK blue spaces"
+    ),
+    names_to = "item",
+    values_to = "response"
+  )
+
+# Filter out NA and non-1:7 values
+long_data <- long_data %>%
+  filter(!is.na(response), response %in% 1:7)
+
+# Convert to factor
+long_data$response <- factor(long_data$response, levels = 1:7)
+
+# Create a named vector
+item_labels <- c(
+  "12.1. Cities should have more blue spaces" = "Cities should have more blue spaces",
+  "12.2. Blue spaces are important for nature" = "Blue spaces are important for nature",
+  "12.3. Blue spaces in the UK are in poor condition" = "Blue spaces in the UK are in poor condition",
+  "12.4. Blue spaces are important for my health and wellbeing" = "Blue spaces are important for my health and wellbeing",
+  "12.5. We should “rewild” UK blue spaces" = "We should “rewild” UK blue spaces"
+)
+
+# Use dplyr::mutate + base R subsetting
+long_data <- long_data %>%
+  mutate(item = item_labels[item])
+
+# Check total number of responses per item (should match participant count)
+long_data %>%
+  group_by(item) %>%
+  summarise(n_responses = n()) %>%
+  print()
+
+# Convert response to numeric for calculations
+long_data <- long_data %>%
+  mutate(response_num = as.numeric(as.character(response)))
+
+# Summary stats for each item
+likert_summary <- long_data %>%
+  group_by(item) %>%
+  summarise(
+    n = n(),
+    mean = round(mean(response_num, na.rm = TRUE), 2),
+    sd = round(sd(response_num, na.rm = TRUE), 2),
+    .groups = "drop"
+  )
+
+# Print the summary
+print(likert_summary)
+
+# Calculate proportions
+prop_data <- long_data %>%
+  group_by(item, response) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(item) %>%
+  mutate(prop = n / sum(n))
+
+# Create diverging categories
+prop_data <- prop_data %>%
+  mutate(response_cat = case_when(
+    response %in% c("1", "2", "3") ~ "Disagree",
+    response == "4"               ~ "Neutral",
+    response %in% c("5", "6", "7") ~ "Agree"
+  ))
+
+# Optional: set diverging bar colors
+likert_colors <- c(
+  "1" = "#9466a1",  # lighter purple (was #762a83)
+  "2" = "#a984bd",  # lighter lavender (was #9970ab)
+  "3" = "#d8bfd8",  # pale purple (same as before)
+  "4" = "#f0f0f0",  # light grey
+  "5" = "#bdbdbd",  # medium grey
+  "6" = "#9ec9c9",  # your teal
+  "7" = "#7ea1a1"   # your dark teal
+)
+
+# Plot
+p1 <- ggplot(prop_data, aes(x = prop, y = fct_rev(item), fill = response)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(
+    values = likert_colors,
+    name = "Response",
+    labels = c(
+      "1 Strongly Disagree", "2", "3", "4 Neutral", 
+      "5", "6", "7 Strongly Agree"
+    )
+  ) +
+  labs(
+    x = "Proportion of responses", 
+    y = NULL,
+    title = "",
+    subtitle = "",
+    caption = "1 = Strongly Disagree, 7 = Strongly Agree"
+  ) +
+  theme_classic(base_size = 14) +  # base text size increase
+  theme(
+    legend.position = "right",      # move legend to right
+    legend.direction = "vertical",  # vertical layout
+    axis.text.x = element_text(size = 14),  # bigger x-axis labels
+    axis.text.y = element_text(size = 14),  # bigger y-axis labels
+    legend.text = element_text(size = 12),  # bigger legend text
+    legend.title = element_text(size = 13, face = "bold")
+  )
+
+p1
+#
+ggsave("attitude_plot.png", plot = p1, width = 15, height = 8, dpi = 500)
+```
+
+```{r boxplot attitude}
+attitude_plot <- read_csv("attitude_plot.csv")
+View(attitude_plot)
+
+
+# Pivot to long format
+# Specify exact columns instead of starts_with
+long_data <- attitude_plot %>%
+  pivot_longer(
+    cols = c(
+      "12.1. Cities should have more blue spaces",
+      "12.2. Blue spaces are important for nature",
+      "12.3. Blue spaces in the UK are in poor condition",
+      "12.4. Blue spaces are important for my health and wellbeing",
+      "12.5. We should “rewild” UK blue spaces"
+    ),
+    names_to = "item",
+    values_to = "response"
+  )
+
+library(ggplot2)
+
+# Define colours for your items (add more if you have >3)
+my_cols <- c(
+  "12.1. Cities should have more blue spaces"                   = "#9ec9c9",
+  "12.2. Blue spaces are important for nature"                  = "#7ea1a1",
+  "12.3. Blue spaces in the UK are in poor condition"            = "#797d7d",
+  "12.4. Blue spaces are important for my health and wellbeing"  = "#b3b3b3",
+  "12.5. We should “rewild” UK blue spaces"                      = "#5f6f6f"
+)
+
+ggplot(long_data, aes(x = item, y = response, fill = item)) +
+  geom_half_violin(side = "r", trim = FALSE, adjust = 0.8, color = NA, alpha = 0.7) +  # right half violin
+  coord_flip() +
+  scale_fill_manual(values = my_cols) +
+  scale_y_continuous(limits = c(0, 8), breaks = 0:8) +
+  labs(
+    x = NULL,
+    y = "Disagree ← → Agree",
+    fill = "Question",
+    title = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 13, face = "bold")
+  )
+```
+
+```{r bar and box plot}
+# Let's summarise counts & percentages for each item × response
+plot_data <- long_data %>%
+  group_by(item, response) %>%
+  summarise(n = n(), .groups = "drop_last") %>%
+  mutate(
+    pct = n / sum(n) * 100
+  ) %>%
+  ungroup()
+
+# Bar plot of responses per item, with % labels
+p <- ggplot(plot_data, aes(x = factor(response), y = pct, fill = item)) +
+  geom_col(position = "dodge", alpha = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", pct)),
+    position = position_dodge(width = 0.9),
+    vjust = -0.2,
+    size = 3.5
+  ) +
+  # Overlay boxplot of raw response distributions
+  geom_boxplot(
+    data = long_data,
+    aes(x = factor(response), y = as.numeric(response), group = item),
+    inherit.aes = FALSE,
+    width = 0.3,
+    alpha = 0.5
+  ) +
+  facet_wrap(~ item, ncol = 1, scales = "free_x") +
+  scale_fill_manual(values = my_cols) +
+  labs(
+    x = "Response",
+    y = "Percentage of respondents",
+    title = "Distribution of Attitudes to Blue Spaces",
+    fill = "Question"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12)
+  )
+
+p
+```
+
+```{r final blue space distribution}
+means <- long_data %>%
+  group_by(item) %>%
+  summarise(
+    mean_resp = mean(as.numeric(response), na.rm = TRUE),
+    se = sd(as.numeric(response), na.rm = TRUE) / sqrt(n()),
+    ci_lower = mean_resp - 1.96 * se,
+    ci_upper = mean_resp + 1.96 * se,
+    .groups = "drop"
+  )
+
+ggplot(plot_data, aes(x = factor(response), y = pct, fill = item)) +
+  # Bars of % responses
+  geom_col(alpha = 0.7, show.legend = FALSE) +
+  # % labels on bars
+  geom_text(
+    aes(label = sprintf("%.1f%%", pct)),
+    vjust = -0.2,
+    size = 3.5
+  ) +
+  # Overlay mean + 95% CI as horizontal point + error bar
+  geom_errorbarh(
+    data = means,
+    aes(
+      x = mean_resp,
+      xmin = ci_lower,      # Fixed: use ci_lower directly
+      xmax = ci_upper,      # Fixed: use ci_upper directly
+      y = max(plot_data$pct) + 5
+    ),
+    inherit.aes = FALSE,
+    height = 8,             # Made taller for visibility
+    colour = "darkblue",
+    size = 0.8              # Made thicker for visibility
+  ) +
+  geom_point(
+    data = means,
+    aes(x = mean_resp, y = max(plot_data$pct) + 5),
+    inherit.aes = FALSE,
+    colour = "darkblue",
+    size = 2
+  ) +
+  facet_wrap(~ item, ncol = 1) +
+  scale_fill_manual(values = my_cols) +
+  scale_x_discrete(limits = as.character(1:7)) +
+  labs(
+    x = "Disagree ↔ Agree",
+    y = "Percentage of respondents",
+    title = "Distribution of Attitudes to Blue Spaces"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    panel.border = element_rect(colour = "black", fill = NA, size = 0.5),
+    panel.grid = element_blank()
+  )
+```
+
+## Visit frequency
+
+```{r diverging bar visit frequency}
+long_visits <- model_data %>%
+  pivot_longer(
+    cols = c(
+      "10.1. Rivers, canals and dykes",
+      "10.2. Park lakes",
+      "10.3. Coastal areas",
+      "10.4. Estuaries",
+      "10.5. Marinas"
+    ),
+    names_to = "type",
+    values_to = "frequency"
+  ) %>%
+  mutate(frequency = case_when(
+    frequency == 52 ~ "Weekly",
+    frequency == 12 ~ "Monthly",
+    frequency == 2  ~ "Every 6 months",
+    frequency == 1  ~ "Once a year",
+    frequency == 0  ~ "Never",
+    TRUE ~ as.character(frequency)
+  )) %>%
+  mutate(
+    frequency = factor(frequency, levels = c("Weekly", "Monthly", "Every 6 months", "Once a year", "Never")),
+    type = factor(type)
+  )
+
+# Define your custom colors here (adjust hex codes or names)
+custom_colors <- c(
+  "10.1. Rivers, canals and dykes" = "#91bfdb",  # blue
+  "10.2. Park lakes" = "#33a02caa",                 # green
+  "10.3. Coastal areas" = "#4575b4",               # red
+  "10.4. Estuaries" = "#fc8d59",                   # orange
+  "10.5. Marinas" = "grey"                      # purple
+)
+
+ggplot(long_visits, aes(x = frequency, fill = type)) +
+  geom_bar(position = position_dodge(width = 0.7), width = 0.6) +  # dodge width < 1 adds gaps
+  scale_fill_manual(values = custom_colors) +
+  labs(
+    x = "Visiting Frequency",
+    y = "Number of Respondents",
+    fill = "Blue Space Type",
+    title = "Visits to Blue Spaces by Frequency and Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Add numeric score for each frequency
+long_visits_summary <- long_visits %>%
+  mutate(freq_score = case_when(
+    frequency == "Never" ~ 0,
+    frequency == "Once a year" ~ 1,
+    frequency == "Every 6 months" ~ 2,
+    frequency == "Monthly" ~ 12,
+    frequency == "Weekly" ~ 52
+  )) %>%
+  group_by(type) %>%
+  summarise(
+    mean_score = mean(freq_score, na.rm = TRUE),
+    n = n()
+  ) %>%
+  arrange(desc(mean_score))
+print(long_visits_summary)
+
+# Create summary table manually or from your data
+visit_summary <- tibble::tibble(
+  type = c("Rivers, canals and dykes", "Coastal areas", "Park lakes", "Estuaries", "Marinas"),
+  mean_annual_visits = c(24.28, 15.35, 15.01, 13.63, 10.85)
+)
+
+ggplot(visit_summary, aes(x = reorder(type, mean_annual_visits), y = mean_annual_visits)) +
+  geom_col(fill = "#9ec9c9") +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Mean Annual Visits",
+    title = ""
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 14),    # X-axis title
+    axis.title.y = element_text(size = 14),    # Y-axis title
+    axis.text.x = element_text(size = 14),     # X-axis tick labels
+    axis.text.y = element_text(size = 14),     # Y-axis tick labels
+    legend.title = element_text(size = 14),    # Legend title
+    legend.text = element_text(size = 14)      # Legend items
+  )
+
+```
+
+```{r stepwise table}
+model_list <- list(
+  sig_model1 = sig_model1,
+  sig_model2 = sig_model2,
+  sig_model3 = sig_model3,
+  sig_model4 = sig_model4,
+  prov_model1 = prov_model1,
+  prov_model2 = prov_model2,
+  prov_model3 = prov_model3,
+  prov_model4 = prov_model4,
+  glm_model_inv_gauss  = glm_model_inv_gauss,
+  glm_model_inv_gauss1 = glm_model_inv_gauss1,
+  glm_model_inv_gauss2 = glm_model_inv_gauss2,
+  glm_model_inv_gauss3 = glm_model_inv_gauss3
+)
+
+library(dplyr)
+library(purrr)
+
+model_comp <- tibble(
+  model   = names(model_list),
+  AIC     = map_dbl(model_list, AIC),
+  logLik  = map_dbl(model_list, ~ as.numeric(logLik(.x))),
+  k       = map_dbl(model_list, ~ attr(logLik(.x), "df")),
+  formula = map_chr(model_list, ~ paste(deparse(formula(.x)), collapse = " "))
+) %>%
+  arrange(AIC)
+```
+
